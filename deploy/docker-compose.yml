@@ -1,0 +1,182 @@
+volumes:
+  policy-enforcement-data:
+    driver: local
+    driver_opts:
+      o: bind
+      type: none
+      device: ./policy-enforcement-service
+services:
+  redis:
+    image: redis:alpine
+    restart : always
+    container_name: redis
+    ports:
+      - "6379:6379"
+    networks:
+      - custom
+  Drugsdb:
+      container_name: "Drugsdb"
+      image: postgres:14.1-alpine
+      restart : always
+      environment:
+        POSTGRES_PASSWORD: drugsdb
+        POSTGRES_USER: drugsdb
+        POSTGRES_DB: drugsdb
+      ports:
+        - "5432:5432"
+      networks:
+        - custom
+      healthcheck:
+        test: ["CMD", "pg_isready", "-U", "drugsdb", "-d", "drugsdb", "-h", "localhost", "-p", "5432"]
+        interval: 5s
+        retries: 5
+  Schedulingdb:
+      container_name: "Schedulingdb"
+      image: postgres:14.1-alpine
+      restart : always
+      environment:
+        POSTGRES_PASSWORD: schedulingdb
+        POSTGRES_USER: schedulingdb
+        POSTGRES_DB: schedulingdb
+      ports:
+        - "5430:5432"
+      networks:
+        - custom
+      healthcheck:
+        test: ["CMD", "pg_isready", "-U", "schedulingdb", "-d", "schedulingdb", "-h", "localhost", "-p", "5432"]
+        interval: 5s
+        retries: 5
+  Userdb:
+    container_name: "Userdb"
+    image: postgres:14.1-alpine
+    restart : always
+    environment:
+      POSTGRES_PASSWORD: userdb
+      POSTGRES_USER: userdb
+      POSTGRES_DB: userdb
+    ports:
+      - "5434:5432"
+    networks:
+      - custom
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "userdb", "-d", "userdb", "-h", "localhost", "-p", "5432"]
+      interval: 5s
+      retries: 5
+  user-service:
+    container_name: user-service
+    restart : always
+    build:
+      context: ../Backend/UserService
+      dockerfile: ./Dockerfile
+    env_file:
+    - .env
+    environment:
+      POSTGRES_DSN: ${POSTGRES_DSN_ASYNC}
+      JWT_SECRET: ${JWT_SECRET}
+      RESET_PASSWORD_TOKEN_SECRET: ${RESET_PASSWORD_TOKEN_SECRET}
+      VERIFICATION_TOKEN_SECRET: ${VERIFICATION_TOKEN_SECRET}
+    ports:
+      - "5002:5002"
+    networks:
+      - custom
+    depends_on:
+      Userdb:
+        condition: service_healthy
+  scheduling-service:
+    container_name: scheduling-service
+    restart : always
+    build:
+      context: ../Backend/SchedulingService
+      dockerfile: ./Dockerfile
+    env_file:
+    - .env
+    environment:
+      POSTGRES_DSN: ${POSTGRES_DSN_SCHEDULING}
+    ports:
+      - "5001:5001"
+    networks:
+      - custom
+    depends_on:
+      Schedulingdb:
+        condition: service_healthy
+  drug-service:
+    container_name: drug-service
+    restart : always
+    build:
+      context: ../Backend/MedicineService
+      dockerfile: ./Dockerfile
+    env_file:
+    - .env
+    environment:
+      POSTGRES_DSN: ${POSTGRES_DSN_DRUG}
+    ports:
+      - "5000:5000"
+    networks:
+      - custom
+    depends_on:
+      Drugsdb:
+        condition: service_healthy
+  notification-service:
+    container_name: notification-service
+    restart : always
+    build:
+      context: ../Backend/NotificationService
+      dockerfile: ./Dockerfile
+    depends_on:
+      - redis
+      - Schedulingdb
+      - Userdb
+    networks:
+      - custom
+  policy-enforcement-service:
+    container_name: policy-enforcement-service
+    restart : always
+    build:
+      context: ../Backend/PolicyService
+      dockerfile: ./Dockerfile
+    volumes:
+      - policy-enforcement-data:/mnt/
+    ports:
+    - "5003:5003"
+    environment:
+      JWT_SECRET: ${JWT_SECRET}
+      POLICIES_CONFIG_PATH: ${POLICIES_CONFIG_PATH}
+    depends_on:
+      - drug-service
+      - scheduling-service
+      - user-service
+    networks:
+      - custom
+  bot_tg:
+    container_name: bot_tg
+    restart : always
+    build:
+      context: ../Backend/bot_pulling
+      dockerfile: ./Dockerfile
+    environment:
+      BOT_TOKEN: ${BOT_TOKEN}
+      WEBAPP_URL: ${WEBAPP_URL}
+    networks:
+      - custom
+  # nginx:
+  #   image: nginx:alpine
+  #   container_name: nginx
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #   volumes:
+  #     - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+  #     - ./nginx/certs:/etc/nginx/certs:ro
+  #     - ../frontend:/usr/share/nginx/html:ro
+  #     - /etc/letsencrypt:/etc/letsencrypt:ro
+  #   env_file:
+  #     - .env
+  #   depends_on:
+  #     - policy-enforcement-service
+  #   networks:
+  #     - custom
+
+
+networks:
+  custom:
+    driver: bridge
